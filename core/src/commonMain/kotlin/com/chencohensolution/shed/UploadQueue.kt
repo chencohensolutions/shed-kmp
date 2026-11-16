@@ -139,6 +139,9 @@ internal class UploadQueue(
             } catch (e: BackendException) {
                 if (e.unauthorized) return RunResult.Unauthorized
                 return RunResult.Offline(sent, e.message ?: "offline")
+            } catch (e: Exception) {
+                // The device couldn't read this file (its folder, its provider): it waits for the next run, the rest go on.
+                putOff += next.sha256
             }
         }
         prune()
