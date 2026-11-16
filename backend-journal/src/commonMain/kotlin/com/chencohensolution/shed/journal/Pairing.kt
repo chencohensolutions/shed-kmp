@@ -8,8 +8,13 @@ data class Pairing(
     val v: Int = 1,
     /** The origin the server answered at last, `https://host:port`. */
     val server: String,
-    /** Its other addresses, from the enrollment link, tried when [server] doesn't answer. */
+    /**
+     * Its other addresses (from the enrollment link, then from the server's `serverInfo.discovery` and its DHT
+     * record), tried when [server] doesn't answer; the newest first.
+     */
     val addresses: List<String> = emptyList(),
+    /** Its key in the BitTorrent DHT, to look up where it is when no address answers; null when it doesn't publish. */
+    val key: String? = null,
     /** The sha256 of the server's key: the server is trusted by it, whatever its address. */
     val fingerprint: String,
     /** The CA that signs the server's certificates (serverInfo.caCertificate), PEM; null until asked. */

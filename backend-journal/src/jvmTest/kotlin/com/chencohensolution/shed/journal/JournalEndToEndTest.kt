@@ -4,7 +4,9 @@ import com.chencohensolution.shed.FileAbout
 import com.chencohensolution.shed.FileKind
 import com.chencohensolution.shed.RunResult
 import com.chencohensolution.shed.Shed
+import com.chencohensolution.shed.journal.discovery.ServerFinder
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.Json
 import okio.FileSystem
 import okio.Path.Companion.toOkioPath
 import java.net.URLEncoder
@@ -16,6 +18,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
+import kotlin.time.Duration
 
 /**
  * Audio Logs against a real journal server: pairing by the enrollment link, uploading a recording through the queue,
@@ -75,6 +78,31 @@ class JournalEndToEndTest {
         // The code was for journal, and is used up.
         val other = JournalBackend("notes", fs, folder / "notes-app", MemoryDeviceKeys(), OkHttpJournalClients(MemoryDeviceKeys()))
         assertFailsWith<PairingException.Rejected> { other.pair(sibling, "x") }
+
+        // The server's address changes: it is found at its other address, then by its DHT record.
+        val pairingPath = folder / "journal" / "pairing.json"
+        val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
+        val kept = json.decodeFromString(Pairing.serializer(), fs.read(pairingPath) { readUtf8() })
+        val gone = "https://127.0.0.1:9"
+        fun moved(pairing: Pairing, dht: suspend (String, String) -> List<String>?): JournalBackend {
+            fs.write(pairingPath) { writeUtf8(json.encodeToString(Pairing.serializer(), pairing)) }
+            return JournalBackend("audio-logs", fs, folder / "journal", keys, OkHttpJournalClients(keys), ServerFinder(dht, stagger = Duration.ZERO))
+        }
+        val atOther = moved(kept.copy(server = gone, addresses = listOf(origin))) { _, _ -> null }
+        assertEquals(sha, atOther.changes(null).added.single { it.sha256 == sha }.sha256)
+        assertEquals(origin, (atOther.state.value as JournalState.Paired).server)
+
+        val dhtKey = "ab".repeat(32)
+        var askedDht: Pair<String, String>? = null
+        val inDht = moved(kept.copy(server = gone, addresses = emptyList(), key = dhtKey)) { key, fingerprint ->
+            askedDht = key to fingerprint
+            listOf(origin)
+        }
+        assertTrue(inDht.holds(sha))
+        assertEquals(dhtKey to kept.fingerprint, askedDht)
+        val found = json.decodeFromString(Pairing.serializer(), fs.read(pairingPath) { readUtf8() })
+        assertEquals(origin, found.server)
+        assertTrue(gone in found.addresses, "the old address is kept to try: ${found.addresses}")
 
         backend.unpair()
         assertEquals(JournalState.NotPaired, backend.state.value)

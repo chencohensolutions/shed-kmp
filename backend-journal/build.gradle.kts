@@ -15,6 +15,7 @@ kotlin {
         commonMain.dependencies {
             api(project(":core"))
             api(libs.ktor.client.core)
+            implementation(libs.ktor.network)
             implementation(libs.kotlinx.serialization.json)
         }
         jvmMain.dependencies {

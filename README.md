@@ -18,7 +18,8 @@ Apps work without any storage: until the user pairs one, nothing goes out.
   - `ShedBackend`: what a storage module implements.
 - `backend-journal`: the journal server (journal-server-go) as storage. `JournalBackend` pairs by the server's
   enrollment link (`journal://enroll?…&fingerprint=…`), sends with `startUpload` and `PUT /upload/{sha256}`, reads
-  with `GET /media/{sha256}` and Range, lists with `changes`, checks with `/verify`. `OkHttpJournalClients` (JVM and
+  with `GET /media/{sha256}` and Range, lists with `changes`, checks with `/verify`, and finds the server again in the
+  DHT when its address changes ("Finding the server"). `OkHttpJournalClients` (JVM and
   Android) pins the server's key or its own CA and presents the device's certificate.
 - `android` (built only where the Android SDK is): `AndroidDeviceKeys` (the Android Keystore, StrongBox when there is
   one), `AndroidShed` (shed in the app's `files/shed/`), `ShedUploads` (WorkManager: the queue runs when the network
@@ -58,6 +59,16 @@ shed finds it (`ShedSiblings.find`) and asks it (`ShedSiblings.ask`, started for
 answers with `JournalBackend.siblingLink(app)`: an enrollment link whose code the server made for that app only, for 2
 minutes. The asking app pairs with it like any link, gets its own key and certificate, and the server keeps it as one
 more app of the same phone (`siblingEnrollmentCode`; revoked together).
+
+## Finding the server
+
+There is no DNS name and no relay. When the server stops answering where it was (its address changed), the journal
+backend finds it the way the journal app does: it tries the server's other addresses (from the enrollment link and
+`serverInfo.discovery`), then looks the server up in the BitTorrent DHT under the key the link names (`key=`), opens its
+sealed record with the server's fingerprint, and tries the addresses it names (`discovery/`, from journal-client-kmp's
+`discovery` package). The clients pin the server's key, so an address that answers is the server. The address that
+answers becomes `server` in `pairing.json`, and the request is sent again there. The DHT is asked at most every 2
+minutes; pairing falls back to it too when none of the link's addresses answers.
 
 ## Using it from an app
 

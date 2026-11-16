@@ -9,6 +9,7 @@ import com.chencohensolution.shed.PieceAnswer
 import com.chencohensolution.shed.RemoteFile
 import com.chencohensolution.shed.ShedBackend
 import com.chencohensolution.shed.UploadStart
+import com.chencohensolution.shed.journal.discovery.ServerFinder
 import io.ktor.client.HttpClient
 import io.ktor.client.request.get
 import io.ktor.client.request.head
@@ -27,6 +28,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
@@ -34,6 +36,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import okio.FileSystem
 import okio.Path
@@ -66,20 +69,30 @@ sealed class PairingException(message: String) : Exception(message) {
  * app's name, so Audio Logs is told apart from journal and sees sound recordings), then sends and reads files over
  * mTLS with the device's key, trusting the server by its key's fingerprint.
  *
+ * When the server stops answering where it was (its address changed), it is found again as the journal app finds it:
+ * at its other addresses, then in the BitTorrent DHT under its key ("Finding the server" in README.md). No DNS name
+ * and no relay are involved.
+ *
  * What it keeps is `pairing.json` in [directory]; the key and certificate are in the platform's key store ([keys]).
  */
-class JournalBackend(
+class JournalBackend internal constructor(
     /** The app's name as the server records it: `audio-logs`, `journal`. */
     private val app: String,
     private val fileSystem: FileSystem,
     directory: Path,
     private val keys: DeviceKeys,
     private val clients: JournalClients,
+    private val finder: ServerFinder,
 ) : ShedBackend {
+    constructor(app: String, fileSystem: FileSystem, directory: Path, keys: DeviceKeys, clients: JournalClients) :
+        this(app, fileSystem, directory, keys, clients, ServerFinder())
+
     private val pairingFile = PairingFile(fileSystem, directory / "pairing.json")
     private val mutex = Mutex()
     private var pairing: Pairing? = pairingFile.load()?.takeIf { keys.has(it.alias) }
     private var client: Pair<Pairing, HttpClient>? = null
+    /** Whether this run asked the server where else it can be reached (`serverInfo.discovery`) yet. */
+    private var discoveryAsked = false
     private val _state = MutableStateFlow(stateOf(pairing))
     val state: StateFlow<JournalState> = _state.asStateFlow()
 
@@ -103,7 +116,14 @@ class JournalBackend(
      * Pairs this app with the server the enrollment link in [text] names: a new key in the device's key store, a
      * certificate for it from the server (using up the link's code), then the server's own CA, asked over mTLS.
      */
-    suspend fun pair(text: String, deviceName: String): JournalState.Paired = mutex.withLock {
+    suspend fun pair(text: String, deviceName: String): JournalState.Paired {
+        mutex.withLock { pairLocked(text, deviceName) }
+        // Where else the server can be reached and its DHT key, to find it when its address changes.
+        askDiscovery()
+        return stateOf(pairing) as JournalState.Paired
+    }
+
+    private suspend fun pairLocked(text: String, deviceName: String) {
         val link = findEnrollmentLink(text) ?: throw PairingException.NotALink()
         val alias = "shed-$app"
         val key = keys.generate(alias)
@@ -131,14 +151,13 @@ class JournalBackend(
         }
         keys.saveCertificate(alias, Base64.decode(result.str("certificate")!!))
         var paired = Pairing(
-            server = origin, addresses = link.addresses, fingerprint = link.fingerprint, alias = alias,
+            server = origin, addresses = link.addresses, key = link.key, fingerprint = link.fingerprint, alias = alias,
             user = result.str("user")!!, deviceName = result.str("deviceName")!!, expiresAt = result.str("expiresAt")!!,
         )
         save(paired)
         // The server's own CA, so it is trusted by it too after its key changes (a new server certificate).
         runCatching { http().graphql(origin, "{ serverInfo { caCertificate } }").obj("serverInfo").str("caCertificate") }
             .getOrNull()?.let { ca -> paired = paired.copy(serverCa = ca).also(::save) }
-        stateOf(paired) as JournalState.Paired
     }
 
     /**
@@ -157,7 +176,7 @@ class JournalBackend(
         val code = result.str("code")!!
         val addresses = (listOf(p.server) + p.addresses).distinct()
         return "journal://enroll?code=" + code.encodeURLParameter() + "&fingerprint=" + p.fingerprint +
-            addresses.joinToString("") { (if (it == addresses.first()) "&server=" else "&address=") + it.encodeURLParameter() }
+            (p.key?.let { "&key=$it" } ?: "") + addresses.joinToString("") { (if (it == addresses.first()) "&server=" else "&address=") + it.encodeURLParameter() }
     }
 
     /** Forgets the server and deletes the device's key. The server still lists the device until it is revoked there. */
@@ -167,6 +186,7 @@ class JournalBackend(
         client?.second?.close()
         client = null
         pairing = null
+        discoveryAsked = false
         _state.value = JournalState.NotPaired
     }
 
@@ -176,20 +196,29 @@ class JournalBackend(
         _state.value = stateOf(new)
     }
 
-    /** Runs [block] without a certificate at the link's addresses in turn, trusting the server by the link's fingerprint. */
+    /**
+     * Runs [block] without a certificate at the link's addresses in turn, trusting the server by the link's
+     * fingerprint; when none answers and the link has the server's DHT key, at the addresses its DHT record names.
+     */
     private suspend fun <T> anonymous(link: EnrollmentLink, block: suspend (HttpClient, String) -> T): Pair<String, T> {
         var last: Exception? = null
-        for (origin in link.addresses) {
-            val http = clients.create(ServerTrust(link.fingerprint), alias = null)
-            try {
-                return origin to block(http, origin)
-            } catch (e: BackendException) {
-                if (!e.offline) throw PairingException.Unreachable(e.message ?: "")
-                last = e
-            } finally {
-                http.close()
+        suspend fun at(origins: List<String>): Pair<String, T>? {
+            for (origin in origins) {
+                val http = clients.create(ServerTrust(link.fingerprint), alias = null)
+                try {
+                    return origin to block(http, origin)
+                } catch (e: BackendException) {
+                    if (!e.offline) throw PairingException.Unreachable(e.message ?: "")
+                    last = e
+                } finally {
+                    http.close()
+                }
             }
+            return null
         }
+        at(link.addresses)?.let { return it }
+        link.key?.let { key -> finder.lookUp(key, link.fingerprint) }?.filter { it !in link.addresses }
+            ?.let { at(it) }?.let { return it }
         throw PairingException.Unreachable(last?.message ?: "no address")
     }
 
@@ -206,24 +235,95 @@ class JournalBackend(
 
     private suspend fun query(query: String, variables: Map<String, kotlinx.serialization.json.JsonElement> = emptyMap()): JsonObject =
         try {
-            http().graphql(paired().server, query, variables)
+            atServer { http, origin -> http.graphql(origin, query, variables) }
         } catch (e: GraphQLException) {
             throw BackendException("The server answered: ${e.message}", cause = e)
         }
 
     /** Sends an HTTP request, turning failures into [BackendException]s. */
     private suspend fun request(send: suspend HttpClient.(String) -> HttpResponse): HttpResponse {
-        val response = try {
-            http().send(paired().server)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: BackendException) {
-            throw e
-        } catch (e: Exception) {
-            throw BackendException("The server didn't answer: ${e.message ?: e::class.simpleName}", offline = true, cause = e)
+        val response = atServer { http, origin ->
+            try {
+                http.send(origin)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: BackendException) {
+                throw e
+            } catch (e: Exception) {
+                throw BackendException("The server didn't answer: ${e.message ?: e::class.simpleName}", offline = true, cause = e)
+            }
         }
         if (response.status.value == 401) throw BackendException("The server refused this device", unauthorized = true)
         return response
+    }
+
+    /**
+     * Runs [send] at the server; when the server can't be reached there, finds it again ([ServerFinder]: its other
+     * addresses, then the DHT) and runs [send] once more where it answers now, which becomes [Pairing.server].
+     */
+    private suspend fun <T> atServer(send: suspend (HttpClient, String) -> T): T {
+        val origin = paired().server
+        val result = try {
+            send(http(), origin)
+        } catch (e: BackendException) {
+            if (!e.unreached) throw e
+            val moved = findServer(origin) ?: throw e
+            send(http(), moved)
+        }
+        if (!discoveryAsked) askDiscovery()
+        return result
+    }
+
+    /** Where the server answers now, after a request to [failed] couldn't reach it; null when it wasn't found. */
+    private suspend fun findServer(failed: String): String? {
+        val p = paired()
+        val found = finder.find(
+            failed = failed,
+            current = { pairing?.server ?: failed },
+            addresses = { pairing?.let { listOf(it.server) + it.addresses }.orEmpty().distinct() },
+            key = p.key,
+            fingerprint = p.fingerprint,
+        ) { candidate -> answersAt(candidate) } ?: return null
+        mutex.withLock {
+            val now = pairing ?: return null
+            if (now.server != found.origin) {
+                save(now.copy(server = found.origin, addresses = keptAddresses(found.fromDht + now.server + now.addresses, found.origin)))
+            }
+        }
+        discoveryAsked = false
+        return found.origin
+    }
+
+    /** Whether the server answers at [origin] at all: any HTTP answer means the TLS handshake, and the pin, passed. */
+    private suspend fun answersAt(origin: String): Boolean = withTimeout(ServerFinder.PROBE_TIMEOUT) {
+        http().get("$origin/query")
+        true
+    }
+
+    /**
+     * Asks the server where else it can be reached and its DHT key (`serverInfo.discovery`), and keeps them, so it can
+     * be found when its address changes. Once a run, and again after it was found elsewhere; a server without
+     * discovery, or one that doesn't answer now, is asked again next time.
+     */
+    private suspend fun askDiscovery() {
+        val p = pairing ?: return
+        discoveryAsked = true
+        val discovery = try {
+            http().graphql(p.server, "{ serverInfo { discovery { key addresses } } }").obj("serverInfo")["discovery"] as? JsonObject
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            discoveryAsked = false
+            return
+        } ?: return
+        val addresses = (discovery["addresses"] as? kotlinx.serialization.json.JsonArray)
+            ?.mapNotNull { runCatching { it.jsonPrimitive.content }.getOrNull()?.let(::originOf) }.orEmpty()
+        val key = discovery.str("key")?.lowercase()?.takeIf(::isKey)
+        mutex.withLock {
+            val now = pairing?.takeIf { it.alias == p.alias } ?: return
+            val updated = now.copy(addresses = keptAddresses(addresses + now.addresses, now.server), key = key ?: now.key)
+            if (updated != now) save(updated)
+        }
     }
 
     override suspend fun startUpload(sha256: String, size: Long, about: FileAbout): UploadStart {
@@ -333,6 +433,14 @@ class JournalBackend(
 
     private companion object {
         const val DEFAULT_PIECE = 16L shl 20
+        const val MAX_ADDRESSES = 16
+
+        /** [addresses] without repeats or [server] (kept apart), at most [MAX_ADDRESSES]. */
+        fun keptAddresses(addresses: List<String>, server: String): List<String> =
+            addresses.filter { it != server }.distinct().take(MAX_ADDRESSES)
+
+        /** The server couldn't be reached at all (no answer, refused, timed out), as against an answer that was an error. */
+        val BackendException.unreached: Boolean get() = offline && cause != null && cause !is GraphQLException
         const val ENROLL = "mutation(\$i: EnrollDeviceInput!) { enrollDevice(input: \$i) { __typename " +
             "... on EnrolledDevice { user deviceName certificate expiresAt } ... on EnrollmentRejected { reason } } }"
     }

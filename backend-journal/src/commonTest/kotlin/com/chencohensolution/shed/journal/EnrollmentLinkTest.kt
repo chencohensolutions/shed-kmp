@@ -16,6 +16,14 @@ class EnrollmentLinkTest {
         assertEquals("3Q0W-2D5G", link.code)
         assertEquals(fp, link.fingerprint)
         assertEquals(listOf("https://home.example:56398", "https://10.0.0.5:56398"), link.addresses)
+        assertNull(link.key, "not a DHT key")
+    }
+
+    @Test
+    fun keepsTheServersDhtKey() {
+        val key = "79b5562e8fe654f94078b112e8a98ba7901f853ae695bed7e0e3910bad049664"
+        val link = parseEnrollmentLink("journal://enroll?code=X&fingerprint=$fp&key=${key.uppercase()}&server=https%3A%2F%2Fh%3A1")!!
+        assertEquals(key, link.key)
     }
 
     @Test

@@ -14,6 +14,8 @@ data class EnrollmentLink(
     /** The server's origins, `https://host:port`, the one to try first first. */
     val addresses: List<String>,
     val fingerprint: String,
+    /** The server's ed25519 key in the BitTorrent DHT (64 hex digits), to find it there when no address answers. */
+    val key: String? = null,
 )
 
 private val LINK_IN_TEXT = Regex("""journal://enroll\?[^\s<>"']+""")
@@ -28,11 +30,12 @@ fun parseEnrollmentLink(link: String): EnrollmentLink? {
     if (url.protocol.name != "journal" || url.host != "enroll") return null
     val code = url.parameters["code"]?.trim()?.takeIf { it.isNotEmpty() } ?: return null
     val fingerprint = url.parameters["fingerprint"]?.trim()?.lowercase()
-        ?.takeIf { v -> v.length == 64 && v.all { it in "0123456789abcdef" } } ?: return null
+        ?.takeIf(::isKey) ?: return null
     val addresses = (listOfNotNull(url.parameters["server"]) + url.parameters.getAll("address").orEmpty())
         .mapNotNull(::originOf).distinct()
     if (addresses.isEmpty()) return null
-    return EnrollmentLink(code, addresses, fingerprint)
+    val key = url.parameters["key"]?.trim()?.lowercase()?.takeIf(::isKey)
+    return EnrollmentLink(code, addresses, fingerprint, key)
 }
 
 /** `https://host:port` of [address] (an origin, or a URL with a path such as `/query`); null unless it is https. */
@@ -42,3 +45,6 @@ fun originOf(address: String): String? {
     val host = if (':' in url.host && !url.host.startsWith("[")) "[${url.host}]" else url.host
     return "https://$host:${url.port}"
 }
+
+/** Whether [text] is 64 lower-case hex digits: a fingerprint or a DHT key. */
+internal fun isKey(text: String): Boolean = text.length == 64 && text.all { it in "0123456789abcdef" }
