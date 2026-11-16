@@ -30,6 +30,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -48,6 +49,9 @@ sealed interface JournalState {
 
     data class Paired(val server: String, val user: String, val deviceName: String) : JournalState
 }
+
+/** What an app made for sound recordings shows beside recordings ([JournalBackend.soundRecordingsShown]). */
+data class SoundRecordingsShown(val calls: Boolean, val voiceMessages: Boolean)
 
 /** Who an enrollment code is for, before it is used ([JournalBackend.preview]). */
 data class PairingPreview(val user: String, val expiresAt: String, val server: String)
@@ -392,7 +396,7 @@ class JournalBackend internal constructor(
     override suspend fun changes(cursor: String?): ChangePage {
         val page = query(
             """query(${'$'}s: String) { changes(since: ${'$'}s, limit: 2000) { cursor hasMore changes { path deleted
-               media { sha256 kind fileName mimeType size takenAt durationMs source uploadedAt } } } }""",
+               media { sha256 kind fileName mimeType size takenAt durationMs source uploadedAt tucked } } } }""",
             mapOf("s" to (cursor?.let(::JsonPrimitive) ?: JsonNull)),
         ).obj("changes")
         val added = mutableListOf<RemoteFile>()
@@ -417,9 +421,69 @@ class JournalBackend internal constructor(
                     source = media.str("source"),
                 ),
                 storedAt = media.str("uploadedAt"),
+                tucked = media.str("tucked") == "true",
             )
         }
         return ChangePage(added, removed, page.str("cursor")!!, page.str("hasMore") == "true")
+    }
+
+    // The user's marks
+
+    /**
+     * What this app shows of sound recordings beside recordings (Audio Logs: calls and voice messages, off until the
+     * user turns them on); null for an app that follows the user's hidden collections, or a server from before
+     * Nov 16, 2026.
+     */
+    suspend fun soundRecordingsShown(): SoundRecordingsShown? {
+        val data = try {
+            query("{ soundRecordingsShown { calls voiceMessages } }")
+        } catch (e: BackendException) {
+            if (e.cause is GraphQLException) return null
+            throw e
+        }
+        val shown = data["soundRecordingsShown"] as? JsonObject ?: return null
+        return SoundRecordingsShown(shown.str("calls") == "true", shown.str("voiceMessages") == "true")
+    }
+
+    /** Sets what this app shows of sound recordings; the next [changes] bring the calls or voice messages, or take them away. */
+    suspend fun setSoundRecordingsShown(shown: SoundRecordingsShown): SoundRecordingsShown {
+        val result = query(
+            "mutation(\$c: Boolean!, \$v: Boolean!) { setSoundRecordingsShown(calls: \$c, voiceMessages: \$v) { calls voiceMessages } }",
+            mapOf("c" to JsonPrimitive(shown.calls), "v" to JsonPrimitive(shown.voiceMessages)),
+        ).obj("setSoundRecordingsShown")
+        return SoundRecordingsShown(result.str("calls") == "true", result.str("voiceMessages") == "true")
+    }
+
+    /**
+     * Marks files private, or not, on the server, with every file that goes with them. Audio Logs never gets a private
+     * file again (the server withholds them from it), so mark one private only once the app is done with it.
+     */
+    suspend fun setPrivate(sha256s: List<String>, private: Boolean) {
+        query(
+            "mutation(\$s: [Sha256!]!, \$p: Boolean!) { setPrivate(sha256s: \$s, private: \$p) { sha256 } }",
+            mapOf("s" to JsonArray(sha256s.map(::JsonPrimitive)), "p" to JsonPrimitive(private)),
+        )
+    }
+
+    /** Tucks files away on the server, or brings them back, on every device of the user. */
+    suspend fun setTucked(sha256s: List<String>, tucked: Boolean) {
+        query(
+            "mutation(\$s: [Sha256!]!, \$t: Boolean!) { setTucked(sha256s: \$s, tucked: \$t) { sha256 } }",
+            mapOf("s" to JsonArray(sha256s.map(::JsonPrimitive)), "t" to JsonPrimitive(tucked)),
+        )
+    }
+
+    /**
+     * Keeps [note] (a JSON object, at most 256 KiB) with the file [sha256] on the server, replacing what was there:
+     * the app's own words about the file, synced with it (journal-server-go `setNote`). Returns false when the server
+     * refused it (too large, or the file isn't there).
+     */
+    suspend fun setNote(sha256: String, note: JsonObject): Boolean {
+        val result = query(
+            "mutation(\$s: Sha256!, \$n: String) { setNote(sha256: \$s, note: \$n) { __typename } }",
+            mapOf("s" to JsonPrimitive(sha256), "n" to JsonPrimitive(note.toString())),
+        ).obj("setNote")
+        return result.str("__typename") == "NoteSaved"
     }
 
     override suspend fun holds(sha256: String): Boolean {

@@ -10,7 +10,7 @@ import okio.FileSystem
 import okio.Path
 
 @Serializable
-internal data class StoredRemote(val sha256: String, val size: Long, val about: FileAbout, val storedAt: String? = null)
+internal data class StoredRemote(val sha256: String, val size: Long, val about: FileAbout, val storedAt: String? = null, val tucked: Boolean = false)
 
 @Serializable
 internal data class RemoteListFile(val v: Int = 1, val cursor: String? = null, val files: List<StoredRemote> = emptyList())
@@ -36,7 +36,7 @@ internal class RemoteList(fileSystem: FileSystem, directory: Path, private val k
             val new = page.added.filter(keep)
             added += new
             stored = RemoteListFile(cursor = page.cursor, files = stored.files.filterNot { it.sha256 in gone } +
-                new.map { StoredRemote(it.sha256, it.size, it.about, it.storedAt) })
+                new.map { StoredRemote(it.sha256, it.size, it.about, it.storedAt, it.tucked) })
             file.save(stored)
             _files.value = stored.files.map { it.toRemote() }
         } while (page.hasMore)
@@ -50,5 +50,5 @@ internal class RemoteList(fileSystem: FileSystem, directory: Path, private val k
         _files.value = emptyList()
     }
 
-    private fun StoredRemote.toRemote() = RemoteFile(sha256, size, about, storedAt)
+    private fun StoredRemote.toRemote() = RemoteFile(sha256, size, about, storedAt, tucked)
 }

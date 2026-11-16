@@ -39,6 +39,8 @@ data class RemoteFile(
     val about: FileAbout,
     /** When the storage got it, RFC 3339; null when it doesn't say. */
     val storedAt: String? = null,
+    /** The user tucked it away: apps leave it out of their lists until the user asks to see it. */
+    val tucked: Boolean = false,
 )
 
 /** What changed on the storage since a cursor. */

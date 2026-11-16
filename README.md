@@ -41,6 +41,11 @@ shed.sync(); shed.remote    // the storage's files
 shed.verify(sha256)         // the storage holds it whole: the phone may delete its copy
 ```
 
+The journal backend also carries the user's marks: `setTucked` (tucked away: `RemoteFile.tucked`, apps leave it out
+of lists until asked), `setPrivate` (Audio Logs never gets a private file again; only an app that sees private files can
+unmark one), `setNote` (the app's own words about a file, a JSON object kept with it on the server), and
+`soundRecordingsShown` / `setSoundRecordingsShown` (whether Audio Logs shows calls and voice messages; off by default).
+
 A file handed over with a `ref` (the app's id for it) may move before it is sent: the app's `FileLocator` says where
 it is when shed sends it (Audio Logs moves finished moments to a folder the user picked).
 

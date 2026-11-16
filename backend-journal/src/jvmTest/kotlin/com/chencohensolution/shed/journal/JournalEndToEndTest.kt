@@ -1,5 +1,6 @@
 package com.chencohensolution.shed.journal
 
+import com.chencohensolution.shed.BackendException
 import com.chencohensolution.shed.FileAbout
 import com.chencohensolution.shed.FileKind
 import com.chencohensolution.shed.RunResult
@@ -7,6 +8,8 @@ import com.chencohensolution.shed.Shed
 import com.chencohensolution.shed.journal.discovery.ServerFinder
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import okio.FileSystem
 import okio.Path.Companion.toOkioPath
 import java.net.URLEncoder
@@ -78,6 +81,24 @@ class JournalEndToEndTest {
         // The code was for journal, and is used up.
         val other = JournalBackend("notes", fs, folder / "notes-app", MemoryDeviceKeys(), OkHttpJournalClients(MemoryDeviceKeys()))
         assertFailsWith<PairingException.Rejected> { other.pair(sibling, "x") }
+
+        // Calls and voice messages are off until the user turns them on in Audio Logs.
+        assertEquals(SoundRecordingsShown(calls = false, voiceMessages = false), backend.soundRecordingsShown())
+        assertEquals(SoundRecordingsShown(calls = true, voiceMessages = false), backend.setSoundRecordingsShown(SoundRecordingsShown(true, false)))
+        assertEquals(null, journal.soundRecordingsShown(), "journal follows the hidden collections")
+
+        // Tucked away, a note kept with it, then marked private: Audio Logs never gets it again.
+        backend.setTucked(listOf(sha), true)
+        shed.sync()
+        assertTrue(shed.remote.value.single { it.sha256 == sha }.tucked, "tucked: ${shed.remote.value}")
+        assertTrue(backend.setNote(sha, buildJsonObject { put("audioLogs", buildJsonObject { put("title", "Class") }) }))
+        backend.setPrivate(listOf(sha), true)
+        shed.sync()
+        assertTrue(shed.remote.value.none { it.sha256 == sha }, "a private recording left Audio Logs")
+        // Only an app that sees private files can bring it back (journal, on a phone not set to withhold them).
+        assertFailsWith<BackendException> { backend.setPrivate(listOf(sha), false) }
+        journal.setPrivate(listOf(sha), false)
+        assertTrue(shed.sync().any { it.sha256 == sha })
 
         // The server's address changes: it is found at its other address, then by its DHT record.
         val pairingPath = folder / "journal" / "pairing.json"
