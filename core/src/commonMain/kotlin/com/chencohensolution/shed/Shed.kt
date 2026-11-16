@@ -91,6 +91,20 @@ class Shed(
     /** Brings [remote] up to date from the storage's change list; returns the files new since the last sync. */
     suspend fun sync(): List<RemoteFile> = remoteList.sync(backend)
 
+    /**
+     * A page of the storage's files of [kind], newest first ([ShedBackend.page]): for a list that goes back years, read
+     * as the user scrolls, instead of the whole [remote] list.
+     */
+    suspend fun page(kind: FileKind, before: String? = null, after: String? = null, limit: Int = 50): FilePage =
+        backend.page(kind, before, after, limit)
+
+    /** The app's own data called [name] on the storage (its labels, its tags): no other app sees it. */
+    suspend fun appData(name: String): AppData = backend.appData(name)
+
+    /** Replaces the app's own data called [name] when it is still at [baseVersion] ([AppDataWrite.Conflict] if not). */
+    suspend fun setAppData(name: String, content: String?, baseVersion: String?): AppDataWrite =
+        backend.setAppData(name, content, baseVersion)
+
     /** Forgets [remote] (after pairing with another storage), so the next [sync] reads it all again. */
     suspend fun forgetRemote() = remoteList.clear()
 

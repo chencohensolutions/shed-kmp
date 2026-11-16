@@ -28,9 +28,25 @@ data class Capabilities(
     val previews: Boolean = false,
     /** The storage says what changed since a cursor ([ShedBackend.changes]). */
     val changeList: Boolean = false,
-    /** The storage keeps small files that change, by version (not in this first version). */
+    /** The storage keeps each app's own data, by version ([ShedBackend.appData]): an app's labels or tags. */
     val appFiles: Boolean = false,
+    /** The storage lists its files of a kind a page at a time, newest first ([ShedBackend.page]). */
+    val pages: Boolean = false,
 )
+
+/** A page of the storage's files, newest first ([ShedBackend.page]): [older] and [newer] ask for the pages either side. */
+data class FilePage(val files: List<RemoteFile>, val older: String?, val newer: String?)
+
+/** A piece of the app's own data on the storage ([ShedBackend.appData]): a JSON object as text, and its version. */
+data class AppData(val content: String?, val version: String?)
+
+/** The storage's answer to [ShedBackend.setAppData]. */
+sealed interface AppDataWrite {
+    data class Saved(val data: AppData) : AppDataWrite
+
+    /** It changed since the version given: [data] is as it is now, to merge into and send again. */
+    data class Conflict(val data: AppData) : AppDataWrite
+}
 
 /** A file on the storage. */
 data class RemoteFile(
@@ -114,4 +130,19 @@ interface ShedBackend {
 
     /** Whether the storage holds the file [sha256] whole, checked, so the device may delete its copy. */
     suspend fun holds(sha256: String): Boolean
+
+    /**
+     * A page of the storage's files of [kind], newest first by when each was made: the newest without a cursor, the next
+     * older ones with [before] (a page's [FilePage.older]), the ones just newer with [after]. Only with
+     * [Capabilities.pages].
+     */
+    suspend fun page(kind: FileKind, before: String? = null, after: String? = null, limit: Int = 50): FilePage =
+        throw BackendException("This storage doesn't list its files by pages")
+
+    /** The app's own data called [name] (only with [Capabilities.appFiles]). */
+    suspend fun appData(name: String): AppData = throw BackendException("This storage doesn't keep app data")
+
+    /** Replaces the app's data called [name] with [content] (null deletes it) when its version is still [baseVersion]. */
+    suspend fun setAppData(name: String, content: String?, baseVersion: String?): AppDataWrite =
+        throw BackendException("This storage doesn't keep app data")
 }

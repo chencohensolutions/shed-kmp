@@ -1,5 +1,6 @@
 package com.chencohensolution.shed.journal
 
+import com.chencohensolution.shed.AppDataWrite
 import com.chencohensolution.shed.BackendException
 import com.chencohensolution.shed.FileAbout
 import com.chencohensolution.shed.FileKind
@@ -101,6 +102,18 @@ class JournalEndToEndTest {
         assertFailsWith<BackendException> { backend.setPrivate(listOf(sha), false) }
         journal.setPrivate(listOf(sha), false)
         assertTrue(shed.sync().any { it.sha256 == sha })
+
+        // Recordings by pages, newest first, without the whole change feed.
+        val page = shed.page(FileKind.AUDIO, limit = 10)
+        assertTrue(page.files.any { it.sha256 == sha && it.note!!.contains("Class") }, "page: $page")
+        assertEquals(null, page.newer)
+        assertTrue(backend.setNote(sha, buildJsonObject { put("title", "Class 2") }), "a newer note is sent on the version it replaces")
+        // Each app's own data: Audio Logs' labels never show in journal.
+        val saved = shed.setAppData("labels", "{\"labels\":[\"Psychology\"]}", null)
+        assertTrue(saved is AppDataWrite.Saved, "$saved")
+        assertEquals(null, journal.appData("labels").content)
+        assertTrue(shed.setAppData("labels", "{}", "stale") is AppDataWrite.Conflict)
+        assertTrue(shed.appData("labels").content!!.contains("Psychology"))
 
         // The server's address changes: it is found at its other address, then by its DHT record.
         val pairingPath = folder / "journal" / "pairing.json"

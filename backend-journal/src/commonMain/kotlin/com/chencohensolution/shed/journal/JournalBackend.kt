@@ -1,10 +1,13 @@
 package com.chencohensolution.shed.journal
 
+import com.chencohensolution.shed.AppData
+import com.chencohensolution.shed.AppDataWrite
 import com.chencohensolution.shed.BackendException
 import com.chencohensolution.shed.Capabilities
 import com.chencohensolution.shed.ChangePage
 import com.chencohensolution.shed.FileAbout
 import com.chencohensolution.shed.FileKind
+import com.chencohensolution.shed.FilePage
 import com.chencohensolution.shed.PieceAnswer
 import com.chencohensolution.shed.RemoteFile
 import com.chencohensolution.shed.ShedBackend
@@ -100,7 +103,7 @@ class JournalBackend internal constructor(
     private val _state = MutableStateFlow(stateOf(pairing))
     val state: StateFlow<JournalState> = _state.asStateFlow()
 
-    override val capabilities = Capabilities(previews = true, changeList = true, appFiles = false)
+    override val capabilities = Capabilities(previews = true, changeList = true, appFiles = true, pages = true)
 
     // Pairing
 
@@ -396,7 +399,7 @@ class JournalBackend internal constructor(
     override suspend fun changes(cursor: String?): ChangePage {
         val page = query(
             """query(${'$'}s: String) { changes(since: ${'$'}s, limit: 2000) { cursor hasMore changes { path deleted
-               media { sha256 kind fileName mimeType size takenAt durationMs source uploadedAt tucked note } } } }""",
+               media { $MEDIA_FIELDS } } } }""",
             mapOf("s" to (cursor?.let(::JsonPrimitive) ?: JsonNull)),
         ).obj("changes")
         val added = mutableListOf<RemoteFile>()
@@ -408,22 +411,7 @@ class JournalBackend internal constructor(
                 removed += sha
                 continue
             }
-            val kind = runCatching { FileKind.valueOf(media.str("kind")!!) }.getOrNull() ?: continue
-            added += RemoteFile(
-                sha256 = media.str("sha256")!!,
-                size = media.long("size") ?: 0,
-                about = FileAbout(
-                    fileName = media.str("fileName") ?: sha,
-                    mimeType = media.str("mimeType") ?: "application/octet-stream",
-                    kind = kind,
-                    takenAt = media.str("takenAt"),
-                    durationMillis = media.long("durationMs"),
-                    source = media.str("source"),
-                ),
-                storedAt = media.str("uploadedAt"),
-                tucked = media.str("tucked") == "true",
-                note = media.str("note"),
-            )
+            added += remoteFileOf(media) ?: continue
         }
         return ChangePage(added, removed, page.str("cursor")!!, page.str("hasMore") == "true")
     }
@@ -480,11 +468,67 @@ class JournalBackend internal constructor(
      * refused it (too large, or the file isn't there).
      */
     suspend fun setNote(sha256: String, note: JsonObject): Boolean {
+        // The note is this app's own on the server (journal's and each other app's are apart): the last write wins, so
+        // a conflict (another phone of the same app wrote it since) is sent again on the version it brings.
+        var base: String? = null
+        repeat(3) {
+            val result = query(
+                "mutation(\$s: Sha256!, \$n: String, \$b: String) { setNote(sha256: \$s, note: \$n, baseVersion: \$b) { __typename ... on NoteConflict { media { noteVersion } } } }",
+                mapOf("s" to JsonPrimitive(sha256), "n" to JsonPrimitive(note.toString()), "b" to (base?.let(::JsonPrimitive) ?: JsonNull)),
+            ).obj("setNote")
+            if (result.str("__typename") == "NoteSaved") return true
+            base = (result["media"] as? JsonObject)?.str("noteVersion") ?: return false
+        }
+        return false
+    }
+
+    override suspend fun page(kind: FileKind, before: String?, after: String?, limit: Int): FilePage {
+        if (kind != FileKind.AUDIO) throw BackendException("The journal server lists only sound recordings by pages")
+        val page = query(
+            """query(${'$'}b: String, ${'$'}a: String, ${'$'}l: Int) { recordingsPage(before: ${'$'}b, after: ${'$'}a, limit: ${'$'}l) {
+               older newer recordings { $MEDIA_FIELDS } } }""",
+            mapOf("b" to (before?.let(::JsonPrimitive) ?: JsonNull), "a" to (after?.let(::JsonPrimitive) ?: JsonNull), "l" to JsonPrimitive(limit)),
+        ).obj("recordingsPage")
+        return FilePage(
+            files = page["recordings"]!!.jsonArray.mapNotNull { remoteFileOf(it.jsonObject) },
+            older = page.str("older"),
+            newer = page.str("newer"),
+        )
+    }
+
+    override suspend fun appData(name: String): AppData {
+        val data = query("query(\$n: String!) { appData(name: \$n) { content version } }", mapOf("n" to JsonPrimitive(name))).obj("appData")
+        return AppData(data.str("content"), data.str("version"))
+    }
+
+    override suspend fun setAppData(name: String, content: String?, baseVersion: String?): AppDataWrite {
         val result = query(
-            "mutation(\$s: Sha256!, \$n: String) { setNote(sha256: \$s, note: \$n) { __typename } }",
-            mapOf("s" to JsonPrimitive(sha256), "n" to JsonPrimitive(note.toString())),
-        ).obj("setNote")
-        return result.str("__typename") == "NoteSaved"
+            "mutation(\$n: String!, \$c: String, \$b: String) { setAppData(name: \$n, content: \$c, baseVersion: \$b) { __typename ... on AppDataSaved { data { content version } } ... on AppDataConflict { data { content version } } } }",
+            mapOf("n" to JsonPrimitive(name), "c" to (content?.let(::JsonPrimitive) ?: JsonNull), "b" to (baseVersion?.let(::JsonPrimitive) ?: JsonNull)),
+        ).obj("setAppData")
+        val data = result.obj("data").let { AppData(it.str("content"), it.str("version")) }
+        return if (result.str("__typename") == "AppDataSaved") AppDataWrite.Saved(data) else AppDataWrite.Conflict(data)
+    }
+
+    /** A file as the server's `Media` has it, or null for a kind shed doesn't know. */
+    private fun remoteFileOf(media: JsonObject): RemoteFile? {
+        val sha = media.str("sha256") ?: return null
+        val kind = runCatching { FileKind.valueOf(media.str("kind")!!) }.getOrNull() ?: return null
+        return RemoteFile(
+            sha256 = sha,
+            size = media.long("size") ?: 0,
+            about = FileAbout(
+                fileName = media.str("fileName") ?: sha,
+                mimeType = media.str("mimeType") ?: "application/octet-stream",
+                kind = kind,
+                takenAt = media.str("takenAt"),
+                durationMillis = media.long("durationMs"),
+                source = media.str("source"),
+            ),
+            storedAt = media.str("uploadedAt"),
+            tucked = media.str("tucked") == "true",
+            note = media.str("note"),
+        )
     }
 
     override suspend fun holds(sha256: String): Boolean {
@@ -498,6 +542,7 @@ class JournalBackend internal constructor(
 
     private companion object {
         const val DEFAULT_PIECE = 16L shl 20
+        const val MEDIA_FIELDS = "sha256 kind fileName mimeType size takenAt durationMs source uploadedAt tucked note"
         const val MAX_ADDRESSES = 16
 
         /** [addresses] without repeats or [server] (kept apart), at most [MAX_ADDRESSES]. */

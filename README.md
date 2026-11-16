@@ -37,13 +37,16 @@ shed.runUploads()           // from the app's background work: Done, Offline (tr
 shed.uploads                // StateFlow: each file waiting, done or refused, with bytes sent
 shed.open(sha256).read(position, length)   // range reads for a player, cached by block
 shed.fetch(sha256) { got, of -> }          // the whole file on the phone, with progress
-shed.sync(); shed.remote    // the storage's files
+shed.sync(); shed.remote    // the storage's files (the whole change list)
+shed.page(FileKind.AUDIO, before = older)  // a page of them, newest first, for a list that goes back years
+shed.appData("labels"); shed.setAppData("labels", json, version)  // the app's own data, no other app sees it
 shed.verify(sha256)         // the storage holds it whole: the phone may delete its copy
 ```
 
 The journal backend also carries the user's marks: `setTucked` (tucked away: `RemoteFile.tucked`, apps leave it out
 of lists until asked), `setPrivate` (Audio Logs never gets a private file again; only an app that sees private files can
-unmark one), `setNote` (the app's own words about a file, a JSON object kept with it on the server), and
+unmark one), `setNote` (the app's own words about a file, a JSON object kept with it on the server; each app has its
+own note on a file, so no app sees or replaces another's), and
 `soundRecordingsShown` / `setSoundRecordingsShown` (whether Audio Logs shows calls and voice messages; off by default).
 
 A file handed over with a `ref` (the app's id for it) may move before it is sent: the app's `FileLocator` says where
