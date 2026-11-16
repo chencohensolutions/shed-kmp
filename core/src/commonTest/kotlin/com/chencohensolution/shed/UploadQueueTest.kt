@@ -42,6 +42,32 @@ class UploadQueueTest {
     }
 
     @Test
+    fun aFileTheStorageKeepsLosingWaitsForTheNextRunAndTheRestIsSent() = runTest {
+        val backend = FakeBackend(pieceSize = 4)
+        val shed = Shed(backend, fs, dir)
+        backend.losing = shed.put(file("l/audio.aac", "lost every time"), about)
+        val kept = shed.put(file("m/audio.aac", "sent"), about)
+        assertEquals(RunResult.Done(sent = 1, refused = 0), shed.runUploads())
+        assertEquals(listOf(UploadState.WAITING, UploadState.DONE), shed.uploads.value.map { it.state })
+        assertContentEquals("sent".encodeToByteArray(), backend.files[kept])
+    }
+
+    @Test
+    fun aFileTheDeviceCantReadDoesNotStopTheRun() = runTest {
+        val backend = FakeBackend(pieceSize = 4)
+        val unreadable = object : okio.ForwardingFileSystem(fs) {
+            override fun openReadOnly(file: okio.Path): okio.FileHandle =
+                if (file.name == "x.aac") throw UnsupportedOperationException("read as streams") else super.openReadOnly(file)
+        }
+        val shed = Shed(backend, fs, dir)
+        shed.put(file("x/x.aac", "unreadable"), about, ref = "x", from = fs)
+        val ok = shed.put(file("y/y.aac", "readable"), about)
+        val reading = Shed(backend, fs, dir, locator = { ref -> if (ref == "x") Located(unreadable, "/moments/x/x.aac".toPath()) else null })
+        assertEquals(RunResult.Done(sent = 1, refused = 0), reading.runUploads())
+        assertContentEquals("readable".encodeToByteArray(), backend.files[ok])
+    }
+
+    @Test
     fun aFileTheStorageHasIsNotSentAgain() = runTest {
         val backend = FakeBackend()
         val shed = Shed(backend, fs, dir)
