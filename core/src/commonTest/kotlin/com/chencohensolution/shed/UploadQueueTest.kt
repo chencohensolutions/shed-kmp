@@ -42,6 +42,17 @@ class UploadQueueTest {
     }
 
     @Test
+    fun aFileTheStorageKeepsLosingWaitsForTheNextRunAndTheRestIsSent() = runTest {
+        val backend = FakeBackend(pieceSize = 4)
+        val shed = Shed(backend, fs, dir)
+        backend.losing = shed.put(file("l/audio.aac", "lost every time"), about)
+        val kept = shed.put(file("m/audio.aac", "sent"), about)
+        assertEquals(RunResult.Done(sent = 1, refused = 0), shed.runUploads())
+        assertEquals(listOf(UploadState.WAITING, UploadState.DONE), shed.uploads.value.map { it.state })
+        assertContentEquals("sent".encodeToByteArray(), backend.files[kept])
+    }
+
+    @Test
     fun aFileTheStorageHasIsNotSentAgain() = runTest {
         val backend = FakeBackend()
         val shed = Shed(backend, fs, dir)

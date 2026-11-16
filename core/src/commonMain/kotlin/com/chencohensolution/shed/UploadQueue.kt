@@ -117,17 +117,22 @@ internal class UploadQueue(
 
     fun waiting(): Int = files.count { it.state == UploadState.WAITING }
 
-    /** Sends what waits, one file at a time, oldest first. */
+    /**
+     * Sends what waits, one file at a time, oldest first. A file the storage keeps losing (it gave up after its restarts)
+     * stays waiting for the next run and the run goes on with the others: tried again in the same run, it was picked
+     * first again and again, and the run never ended.
+     */
     suspend fun run(backend: ShedBackend): RunResult {
         var sent = 0
         var refused = 0
+        val putOff = mutableSetOf<String>()
         while (true) {
-            val next = mutex.withLock { files.firstOrNull { it.state == UploadState.WAITING } } ?: break
+            val next = mutex.withLock { files.firstOrNull { it.state == UploadState.WAITING && it.sha256 !in putOff } } ?: break
             try {
                 when (send(backend, next)) {
                     UploadState.DONE -> sent++
                     UploadState.REFUSED -> refused++
-                    UploadState.WAITING -> Unit
+                    UploadState.WAITING -> putOff += next.sha256
                 }
             } catch (e: CancellationException) {
                 throw e

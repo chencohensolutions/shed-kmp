@@ -14,6 +14,8 @@ class FakeBackend(var pieceSize: Long = 4) : ShedBackend {
     var dropAfterPieces: Int? = null
     val reads = mutableListOf<LongRange>()
     var refuse: String? = null
+    /** Every piece is answered Gone (the storage lost the upload), for this file. */
+    var losing: String? = null
     private val log = mutableListOf<Pair<String, Boolean>>() // sha, removed
 
     private fun check() {
@@ -38,6 +40,7 @@ class FakeBackend(var pieceSize: Long = 4) : ShedBackend {
             }
             dropAfterPieces = it - 1
         }
+        if (sha256 == losing) return PieceAnswer.Gone
         val have = partial[sha256] ?: ByteArray(0)
         if (offset != have.size.toLong()) return PieceAnswer.WrongOffset(have.size.toLong())
         val now = have + bytes
