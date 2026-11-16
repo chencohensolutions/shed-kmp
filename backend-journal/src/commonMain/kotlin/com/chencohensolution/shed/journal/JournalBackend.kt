@@ -57,7 +57,7 @@ sealed class PairingException(message: String) : Exception(message) {
     class Rejected(val reason: String) : PairingException("The server refused: $reason")
 
     /** None of the link's addresses answered. */
-    class Unreachable(cause: String) : PairingException("The server didn't answer: $cause")
+    class Unreachable(val detail: String) : PairingException("The server didn't answer: $detail")
 }
 
 /**
