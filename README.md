@@ -50,6 +50,15 @@ one. Shed sends the app's name (`app` in `enrollDevice`: `audio-logs`, `journal`
 Audio Logs see sound recordings, which it hides from other devices by default. Servers before Nov 16, 2026 don't know
 the field: shed enrolls again without it.
 
+### One enrollment per phone
+
+The user enrolls a phone once (owner's request, Nov 16, 2026), in whichever app comes first. Another app built with
+shed finds it (`ShedSiblings.find`) and asks it (`ShedSiblings.ask`, started for a result); the paired app's
+`SharePairingActivity` (in shed's manifest, so every shed app has it) asks the user, naming the app that asks, and
+answers with `JournalBackend.siblingLink(app)`: an enrollment link whose code the server made for that app only, for 2
+minutes. The asking app pairs with it like any link, gets its own key and certificate, and the server keeps it as one
+more app of the same phone (`siblingEnrollmentCode`; revoked together).
+
 ## Using it from an app
 
 Add this repository as a git submodule (`shed/`) and `includeBuild("shed")` in the app's `settings.gradle.kts`; then

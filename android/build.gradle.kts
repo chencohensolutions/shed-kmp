@@ -19,6 +19,7 @@ kotlin {
         androidMain.dependencies {
             api(project(":backend-journal"))
             implementation(libs.androidx.work.runtime)
+            implementation(libs.kotlinx.coroutines.android)
         }
     }
 }

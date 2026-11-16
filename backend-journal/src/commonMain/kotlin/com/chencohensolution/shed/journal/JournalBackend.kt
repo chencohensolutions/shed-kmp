@@ -20,6 +20,7 @@ import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
 import io.ktor.client.statement.readRawBytes
 import io.ktor.http.HttpHeaders
+import io.ktor.http.encodeURLParameter
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -138,6 +139,25 @@ class JournalBackend(
         runCatching { http().graphql(origin, "{ serverInfo { caCertificate } }").obj("serverInfo").str("caCertificate") }
             .getOrNull()?.let { ca -> paired = paired.copy(serverCa = ca).also(::save) }
         stateOf(paired) as JournalState.Paired
+    }
+
+    /**
+     * An enrollment link for another app on this phone ([app], e.g. `journal`), so the user enrolls the phone once: the
+     * server makes a code that only that app can use, for 2 minutes, and the other app pairs with the link as with
+     * one from `enroll-code` ([pair]), joining this phone on the server. Ask the user first: the link lets that app
+     * read their journal. Android hands it over with shed's `ShedSiblings`.
+     */
+    suspend fun siblingLink(app: String): String {
+        val p = paired()
+        val result = query(
+            "mutation(\$a: String!) { siblingEnrollmentCode(app: \$a) { __typename ... on SiblingCode { code } ... on EnrollmentRejected { reason } } }",
+            mapOf("a" to JsonPrimitive(app)),
+        ).obj("siblingEnrollmentCode")
+        result.str("reason")?.let { throw PairingException.Rejected(it) }
+        val code = result.str("code")!!
+        val addresses = (listOf(p.server) + p.addresses).distinct()
+        return "journal://enroll?code=" + code.encodeURLParameter() + "&fingerprint=" + p.fingerprint +
+            addresses.joinToString("") { (if (it == addresses.first()) "&server=" else "&address=") + it.encodeURLParameter() }
     }
 
     /** Forgets the server and deletes the device's key. The server still lists the device until it is revoked there. */

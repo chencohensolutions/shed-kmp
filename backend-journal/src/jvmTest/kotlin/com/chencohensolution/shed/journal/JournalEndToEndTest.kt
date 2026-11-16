@@ -13,6 +13,7 @@ import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
@@ -62,6 +63,18 @@ class JournalEndToEndTest {
         // Putting it again sends nothing.
         shed.put(file, FileAbout("moment.m4a", "audio/mp4", FileKind.AUDIO))
         assertEquals(RunResult.Done(0, 0), shed.runUploads())
+
+        // One enrollment per phone: journal pairs with a link Audio Logs asked the server for.
+        val journalKeys = MemoryDeviceKeys()
+        val journal = JournalBackend("journal", fs, folder / "journal-app", journalKeys, OkHttpJournalClients(journalKeys))
+        val sibling = backend.siblingLink("journal")
+        assertTrue(sibling.startsWith("journal://enroll?"), sibling)
+        val joined = journal.pair(sibling, "ignored: the phone keeps its name")
+        assertEquals(paired.user, joined.user)
+        assertEquals("Shed e2e", joined.deviceName)
+        // The code was for journal, and is used up.
+        val other = JournalBackend("notes", fs, folder / "notes-app", MemoryDeviceKeys(), OkHttpJournalClients(MemoryDeviceKeys()))
+        assertFailsWith<PairingException.Rejected> { other.pair(sibling, "x") }
 
         backend.unpair()
         assertEquals(JournalState.NotPaired, backend.state.value)
