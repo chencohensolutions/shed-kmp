@@ -5,7 +5,7 @@ import okio.FileSystem
 import okio.Path
 
 /**
- * The one object an app talks to (docs/plan.md "Contract API"). It sends files to the storage and reads them back,
+ * The one object an app talks to (README.md, "The API"). It sends files to the storage and reads them back,
  * whatever the storage is: [backend] is the journal server's module, or another storage's later.
  *
  * Everything shed keeps is under [directory], in its own files: the upload queue (`uploads.json`), the cache

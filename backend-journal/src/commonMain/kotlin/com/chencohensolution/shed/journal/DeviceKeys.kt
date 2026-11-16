@@ -16,7 +16,7 @@ interface DeviceKey {
 /**
  * The device's key store, per platform: Android's Keystore (in StrongBox when there is one), the iPhone's Secure
  * Enclave. Each app has its own: Android ties a key to the app that made it, which is why two apps pair as two
- * devices (docs/design.md, "Pairing").
+ * devices (README.md, "Pairing").
  */
 interface DeviceKeys {
     /** A new EC P-256 key under [alias], replacing any there. */
