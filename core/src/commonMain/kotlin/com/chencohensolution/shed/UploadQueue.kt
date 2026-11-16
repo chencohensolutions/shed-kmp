@@ -85,7 +85,9 @@ internal data class QueueFile(val v: Int = 1, val files: List<QueuedFile> = empt
 /**
  * The files waiting to go to the storage, kept on disk (`uploads.json`), so a file handed over is sent even after the
  * app was killed. [run] sends them in pieces, resuming where the storage says it got to, so a dropped connection costs
- * one piece at most. Files done stay listed for a while ([KEEP_DONE]) so the app can show them as backed up.
+ * one piece at most. A file done stays listed until the app that handed it over [acknowledge]s it (owner's call,
+ * Nov 17, 2026: shed will one day be one app serving several, and the app must learn every upload's end); it was kept
+ * a week before, and the app took a file no longer listed for one sent.
  */
 internal class UploadQueue(
     private val fileSystem: FileSystem,
@@ -144,7 +146,6 @@ internal class UploadQueue(
                 putOff += next.sha256
             }
         }
-        prune()
         return RunResult.Done(sent, refused)
     }
 
@@ -201,10 +202,10 @@ internal class UploadQueue(
         state
     }
 
-    /** Drops files done more than [KEEP_DONE] ago. */
-    private suspend fun prune() = mutex.withLock {
-        val cutoff = now() - KEEP_DONE
-        val kept = files.filterNot { it.state == UploadState.DONE && (it.doneAt ?: 0) < cutoff }
+    /** The app recorded these files as sent: they leave the list. Only files done; others are left as they are. */
+    suspend fun acknowledge(sha256s: Collection<String>) = mutex.withLock {
+        val gone = sha256s.toSet()
+        val kept = files.filterNot { it.state == UploadState.DONE && it.sha256 in gone }
         if (kept.size != files.size) update(kept)
     }
 
@@ -215,9 +216,4 @@ internal class UploadQueue(
     }
 
     private fun statusOf(q: QueuedFile) = UploadStatus(q.sha256, q.about.fileName, q.size, q.sent, q.state, q.refused, q.ref)
-
-    companion object {
-        /** How long files done stay listed: a week. */
-        const val KEEP_DONE = 7L * 24 * 60 * 60 * 1000
-    }
 }
