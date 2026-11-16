@@ -47,7 +47,20 @@ internal class Cache(
     val downloads: StateFlow<List<DownloadStatus>> = _downloads.asStateFlow()
 
     private fun wholePath(sha: String) = directory / "whole" / sha
-    private fun blockPath(sha: String, block: Long) = directory / "blocks" / sha / block.toString()
+    private fun blockPath(sha: String, block: Long) = directory / BLOCKS / sha / block.toString()
+
+    init {
+        // Blocks of the size before (1 MiB, until Nov 16, 2026) are let go: their numbers mean other places now.
+        if (fileSystem.exists(directory / "blocks")) {
+            runCatching { fileSystem.deleteRecursively(directory / "blocks") }
+            save(index.mapValues { (_, e) -> if (e.whole) e else e.copy(bytes = 0) })
+        }
+    }
+
+    /** The size of [sha] as the app already knows it (from the storage's list): the first read needn't ask. */
+    suspend fun knowSize(sha: String, size: Long) = mutex.withLock {
+        if (sha !in index) save(index + (sha to CachedEntry(size, now())))
+    }
 
     /** The size of [sha], from the cache, else from the storage; null when the storage doesn't have it. */
     suspend fun size(backend: ShedBackend, sha: String): Long? {
@@ -130,7 +143,7 @@ internal class Cache(
             _downloads.value = _downloads.value.filterNot { it.sha256 == sha }
             fileSystem.delete(temp)
         }
-        fileSystem.deleteRecursively(directory / "blocks" / sha)
+        fileSystem.deleteRecursively(directory / BLOCKS / sha)
         mutex.withLock {
             val entry = index[sha] ?: CachedEntry(size, now())
             save(index + (sha to entry.copy(whole = true, bytes = size, lastUsed = now())))
@@ -157,7 +170,7 @@ internal class Cache(
         for ((sha, entry) in index.entries.filter { !it.value.pinned && it.value.bytes > 0 }.sortedBy { it.value.lastUsed }) {
             if (total <= limitBytes) break
             fileSystem.delete(wholePath(sha))
-            fileSystem.deleteRecursively(directory / "blocks" / sha)
+            fileSystem.deleteRecursively(directory / BLOCKS / sha)
             kept = kept + (sha to entry.copy(whole = false, bytes = 0))
             total -= entry.bytes
         }
@@ -175,7 +188,11 @@ internal class Cache(
     }
 
     companion object {
-        /** Reads are fetched and kept in blocks of 1 MiB: a few seconds of audio, a fraction of a photo. */
-        const val BLOCK = 1 shl 20
+        /**
+         * Reads are fetched and kept in blocks of 256 KiB: small enough that a player's first read (the start of a
+         * recording, then its index at the end) comes in a second on a slow link.
+         */
+        const val BLOCK = 1 shl 18
+        private const val BLOCKS = "parts"
     }
 }

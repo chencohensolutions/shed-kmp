@@ -56,7 +56,9 @@ class Shed(
     // Reading
 
     /** A reader of [sha256] by ranges, for a player: it fetches only what is read and keeps it in the cache. */
-    suspend fun open(sha256: String): ShedReader {
+    suspend fun open(sha256: String, knownSize: Long? = null): ShedReader {
+        // A size the app knows from the storage's list spares the first read a question to the storage.
+        if (knownSize != null && knownSize > 0) cache.knowSize(sha256, knownSize)
         val size = cache.size(backend, sha256) ?: throw BackendException("The storage doesn't have $sha256")
         return ShedReader(sha256, size) { position, length -> cache.read(backend, sha256, position, length) }
     }
