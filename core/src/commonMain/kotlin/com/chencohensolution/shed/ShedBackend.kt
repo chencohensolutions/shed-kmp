@@ -125,8 +125,11 @@ interface ShedBackend {
     /** [length] bytes of the file [sha256] from [from] (fewer at its end). */
     suspend fun read(sha256: String, from: Long, length: Int): ByteArray
 
-    /** What changed since [cursor]; null for everything. Only when [Capabilities.changeList]. */
-    suspend fun changes(cursor: String?): ChangePage
+    /**
+     * What changed since [cursor]; null for everything. Only when [Capabilities.changeList]. With [kinds], only files of
+     * those kinds (a storage that can't filter may send others: the caller filters too); ask with the same kinds each time.
+     */
+    suspend fun changes(cursor: String?, kinds: Set<FileKind> = emptySet()): ChangePage
 
     /** Whether the storage holds the file [sha256] whole, checked, so the device may delete its copy. */
     suspend fun holds(sha256: String): Boolean

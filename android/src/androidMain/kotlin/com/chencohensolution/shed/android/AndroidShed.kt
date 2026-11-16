@@ -23,12 +23,14 @@ class AndroidShed(
     app: String,
     keepListed: (RemoteFile) -> Boolean = { true },
     locator: FileLocator? = null,
+    /** The kinds the list of what the server holds is asked for (Audio Logs: sound); empty for all. */
+    listedKinds: Set<FileKind> = emptySet(),
 ) {
     private val folder = context.applicationContext.filesDir.toOkioPath() / "shed"
     private val keys = AndroidDeviceKeys()
     val clients = OkHttpJournalClients(keys)
     val journal = JournalBackend(app, FileSystem.SYSTEM, folder / "journal", keys, clients)
-    val shed = Shed(journal, FileSystem.SYSTEM, folder, keepListed = keepListed, locator = locator)
+    val shed = Shed(journal, FileSystem.SYSTEM, folder, keepListed = keepListed, listedKinds = listedKinds, locator = locator)
 
     /** The name the server lists this device by, until the user names it: the phone's model. */
     val defaultDeviceName: String = "${Build.MANUFACTURER.replaceFirstChar { it.uppercase() }} ${Build.MODEL}"

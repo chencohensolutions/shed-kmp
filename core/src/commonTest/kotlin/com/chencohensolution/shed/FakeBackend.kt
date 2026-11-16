@@ -78,12 +78,16 @@ class FakeBackend(var pieceSize: Long = 4) : ShedBackend {
         log += sha to true
     }
 
-    override suspend fun changes(cursor: String?): ChangePage {
+    /** The kinds each [changes] call asked for. */
+    val askedKinds = mutableListOf<Set<FileKind>>()
+
+    override suspend fun changes(cursor: String?, kinds: Set<FileKind>): ChangePage {
         check()
+        askedKinds += kinds
         val from = cursor?.toInt() ?: 0
         val page = log.drop(from).take(2)
         return ChangePage(
-            added = page.filter { !it.second && it.first in files }.map { RemoteFile(it.first, files[it.first]!!.size.toLong(), abouts[it.first]!!) },
+            added = page.filter { !it.second && it.first in files && (kinds.isEmpty() || abouts[it.first]!!.kind in kinds) }.map { RemoteFile(it.first, files[it.first]!!.size.toLong(), abouts[it.first]!!) },
             removed = page.filter { it.second }.map { it.first },
             cursor = (from + page.size).toString(),
             hasMore = from + page.size < log.size,

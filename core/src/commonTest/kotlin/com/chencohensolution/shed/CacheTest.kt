@@ -81,4 +81,14 @@ class CacheTest {
         assertEquals(listOf(later), shed.sync().map { it.sha256 })
         assertEquals(listOf(later), Shed(backend, fs, "/shed".toPath()).remote.value.map { it.sha256 }, "kept on disk")
     }
+
+    @Test
+    fun theListAsksTheStorageForItsKindsOnly() = runTest {
+        val backend = FakeBackend()
+        val audio = backend.add("a recording".encodeToByteArray(), about)
+        backend.add("a photo".encodeToByteArray(), FileAbout("a.jpg", "image/jpeg", FileKind.PHOTO))
+        val shed = Shed(backend, fs, "/kinds".toPath(), keepListed = { it.about.kind == FileKind.AUDIO }, listedKinds = setOf(FileKind.AUDIO))
+        assertEquals(listOf(audio), shed.sync().map { it.sha256 })
+        assertEquals(setOf(setOf(FileKind.AUDIO)), backend.askedKinds.toSet())
+    }
 }

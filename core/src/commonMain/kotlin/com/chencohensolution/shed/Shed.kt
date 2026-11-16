@@ -20,13 +20,15 @@ class Shed(
     cacheLimitBytes: Long = DEFAULT_CACHE_LIMIT,
     /** Which files on the storage [remote] lists: all by default; Audio Logs keeps sound recordings. */
     keepListed: (RemoteFile) -> Boolean = { true },
+    /** The kinds [remote] lists, asked of the storage so it sends only those (Audio Logs: sound); empty for all. */
+    listedKinds: Set<FileKind> = emptySet(),
     /** Finds files the app handed over by a ref ([put] with `ref`); none when the app only hands over paths. */
     locator: FileLocator? = null,
     now: () -> Long = ::nowMillis,
 ) {
     private val queue = UploadQueue(fileSystem, directory, now, locator)
     private val cache = Cache(fileSystem, directory / "cache", cacheLimitBytes, now)
-    private val remoteList = RemoteList(fileSystem, directory, keepListed)
+    private val remoteList = RemoteList(fileSystem, directory, keepListed, listedKinds)
 
     // Sending
 

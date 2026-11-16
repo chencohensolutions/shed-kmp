@@ -396,12 +396,26 @@ class JournalBackend internal constructor(
         }
     }
 
-    override suspend fun changes(cursor: String?): ChangePage {
-        val page = query(
-            """query(${'$'}s: String) { changes(since: ${'$'}s, limit: 2000) { cursor hasMore changes { path deleted
-               media { $MEDIA_FIELDS } } } }""",
-            mapOf("s" to (cursor?.let(::JsonPrimitive) ?: JsonNull)),
-        ).obj("changes")
+    /** False once the server said it can't filter the change list by kind (one from before Nov 16, 2026). */
+    private var kindsKnown = true
+
+    override suspend fun changes(cursor: String?, kinds: Set<FileKind>): ChangePage {
+        val since = mapOf("s" to (cursor?.let(::JsonPrimitive) ?: JsonNull))
+        val fields = "cursor hasMore changes { path deleted media { $MEDIA_FIELDS } }"
+        val page = if (kinds.isNotEmpty() && kindsKnown) {
+            try {
+                query(
+                    "query(\$s: String, \$k: [MediaKind!]) { changes(since: \$s, limit: 2000, kinds: \$k) { $fields } }",
+                    since + ("k" to JsonArray(kinds.map { JsonPrimitive(it.name) })),
+                )
+            } catch (e: BackendException) {
+                if (e.cause !is GraphQLException) throw e
+                kindsKnown = false // an older server: everything comes, and the caller keeps what it lists
+                query("query(\$s: String) { changes(since: \$s, limit: 2000) { $fields } }", since)
+            }
+        } else {
+            query("query(\$s: String) { changes(since: \$s, limit: 2000) { $fields } }", since)
+        }.obj("changes")
         val added = mutableListOf<RemoteFile>()
         val removed = mutableListOf<String>()
         for (change in page["changes"]!!.jsonArray.map { it.jsonObject }) {
