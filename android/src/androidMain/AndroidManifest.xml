@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Finding the other apps on the phone that use shed, to pair once for all of them (ShedSiblings). -->
+    <queries>
+        <intent>
+            <action android:name="com.chencohensolution.shed.action.SHARE_PAIRING" />
+        </intent>
+    </queries>
+
+    <application>
+        <!-- Another app on the phone asks this one for a pairing; the user confirms here. -->
+        <activity
+            android:name="com.chencohensolution.shed.android.SharePairingActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar">
+            <intent-filter>
+                <action android:name="com.chencohensolution.shed.action.SHARE_PAIRING" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

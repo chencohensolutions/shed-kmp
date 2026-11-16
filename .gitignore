@@ -1,0 +1,9 @@
+*.iml
+.kotlin
+.gradle
+**/build/
+local.properties
+.idea
+.DS_Store
+# The end-to-end test's journal server (scripts/e2e.sh)
+e2e/
