@@ -20,9 +20,11 @@ class Shed(
     cacheLimitBytes: Long = DEFAULT_CACHE_LIMIT,
     /** Which files on the storage [remote] lists: all by default; Audio Logs keeps sound recordings. */
     keepListed: (RemoteFile) -> Boolean = { true },
+    /** Finds files the app handed over by a ref ([put] with `ref`); none when the app only hands over paths. */
+    locator: FileLocator? = null,
     now: () -> Long = ::nowMillis,
 ) {
-    private val queue = UploadQueue(fileSystem, directory, now)
+    private val queue = UploadQueue(fileSystem, directory, now, locator)
     private val cache = Cache(fileSystem, directory / "cache", cacheLimitBytes, now)
     private val remoteList = RemoteList(fileSystem, directory, keepListed)
 
@@ -35,8 +37,12 @@ class Shed(
      * Hands [file] to shed to send: hashed now and queued on disk, so it is sent even if the app is killed. The file must
      * be finished: shed never looks at it again but to read it while sending. Returns its sha256, the name the storage
      * knows it by. The next [runUploads] sends it.
+     *
+     * With a [ref] (the app's name for it, such as a moment's id), the file may move before it is sent: the
+     * [FileLocator] finds it by the ref then. [from] is the file system it is in now.
      */
-    suspend fun put(file: Path, about: FileAbout): String = queue.put(file, about)
+    suspend fun put(file: Path, about: FileAbout, ref: String? = null, from: FileSystem? = null): String =
+        if (from == null) queue.put(file, about, ref) else queue.put(file, about, ref, from)
 
     /** How many files wait to be sent. */
     fun waiting(): Int = queue.waiting()

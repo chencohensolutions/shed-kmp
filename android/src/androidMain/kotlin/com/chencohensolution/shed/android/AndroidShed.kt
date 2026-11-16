@@ -3,6 +3,7 @@ package com.chencohensolution.shed.android
 import android.content.Context
 import android.os.Build
 import com.chencohensolution.shed.FileKind
+import com.chencohensolution.shed.FileLocator
 import com.chencohensolution.shed.RemoteFile
 import com.chencohensolution.shed.Shed
 import com.chencohensolution.shed.journal.JournalBackend
@@ -17,12 +18,17 @@ import okio.Path.Companion.toOkioPath
  *
  * Until the app is paired nothing goes out: [Shed.put] queues and [Shed.runUploads] reports that it isn't paired.
  */
-class AndroidShed(context: Context, app: String, keepListed: (RemoteFile) -> Boolean = { true }) {
+class AndroidShed(
+    context: Context,
+    app: String,
+    keepListed: (RemoteFile) -> Boolean = { true },
+    locator: FileLocator? = null,
+) {
     private val folder = context.applicationContext.filesDir.toOkioPath() / "shed"
     private val keys = AndroidDeviceKeys()
     val clients = OkHttpJournalClients(keys)
     val journal = JournalBackend(app, FileSystem.SYSTEM, folder / "journal", keys, clients)
-    val shed = Shed(journal, FileSystem.SYSTEM, folder, keepListed = keepListed)
+    val shed = Shed(journal, FileSystem.SYSTEM, folder, keepListed = keepListed, locator = locator)
 
     /** The name the server lists this device by, until the user names it: the phone's model. */
     val defaultDeviceName: String = "${Build.MANUFACTURER.replaceFirstChar { it.uppercase() }} ${Build.MODEL}"

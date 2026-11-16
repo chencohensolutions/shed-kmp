@@ -78,4 +78,24 @@ class UploadQueueTest {
         assertEquals(RunResult.Unauthorized, shed.runUploads())
         assertEquals(1, shed.waiting())
     }
+
+    @Test
+    fun aFileHandedOverByRefIsFoundWhereItMovedTo() = runTest {
+        val backend = FakeBackend()
+        val library = FakeFileSystem()
+        var where = Located(fs, file("m1/audio.aac", "a moment that moves"))
+        val shed = Shed(backend, fs, dir, locator = { ref -> if (ref == "m1") where else null })
+        val sha = shed.put(where.path, about, ref = "m1")
+
+        // The app moves the finished moment to its library before the upload runs.
+        val moved = "/library/moments/m1/audio.aac".toPath()
+        library.createDirectories(moved.parent!!)
+        library.write(moved) { writeUtf8("a moment that moves") }
+        fs.delete(where.path)
+        where = Located(library, moved)
+
+        assertEquals(RunResult.Done(sent = 1, refused = 0), shed.runUploads())
+        assertContentEquals("a moment that moves".encodeToByteArray(), backend.files[sha])
+        assertEquals("m1", shed.uploads.value.single().ref)
+    }
 }

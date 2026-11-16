@@ -35,7 +35,21 @@ data class UploadStatus(
     val sent: Long,
     val state: UploadState,
     val refused: String? = null,
+    /** What the app named the file by when it handed it over ([Shed.put]'s ref), e.g. a moment's id. */
+    val ref: String? = null,
 )
+
+/** Where a file the app named by a ref is now, as [FileLocator] finds it. */
+class Located(val fileSystem: FileSystem, val path: Path)
+
+/**
+ * Finds a file the app handed over by a ref instead of a path: the app moves its files (Audio Logs moves a finished
+ * moment to a folder the user picked), so the queue asks where the file is when it sends it.
+ */
+fun interface FileLocator {
+    /** Where the file named [ref] is now; null when it is gone. */
+    fun locate(ref: String): Located?
+}
 
 /** How a run of the queue ended. */
 sealed interface RunResult {
@@ -61,6 +75,8 @@ internal data class QueuedFile(
     val sent: Long = 0,
     val refused: String? = null,
     val doneAt: Long? = null,
+    /** Set when the app handed the file over by a ref: [path] is then where it was, and [FileLocator] finds it now. */
+    val ref: String? = null,
 )
 
 @Serializable
@@ -75,6 +91,7 @@ internal class UploadQueue(
     private val fileSystem: FileSystem,
     directory: Path,
     private val now: () -> Long = ::nowMillis,
+    private val locator: FileLocator? = null,
 ) {
     private val file = JsonFile(fileSystem, directory / "uploads.json", QueueFile.serializer()) { QueueFile() }
     private val mutex = Mutex()
@@ -82,14 +99,18 @@ internal class UploadQueue(
     private val _status = MutableStateFlow(files.map(::statusOf))
     val status: StateFlow<List<UploadStatus>> = _status.asStateFlow()
 
-    /** Hands [path] over: hashed now (it must be finished), queued, and returns its sha256. Again for a file already queued: nothing new. */
-    suspend fun put(path: Path, about: FileAbout): String {
-        val sha256 = sha256Of(fileSystem, path)
-        val size = fileSystem.metadata(path).size ?: error("No size for $path")
+    /**
+     * Hands [path] over: hashed now (it must be finished), queued, and returns its sha256. Again for a file already
+     * queued: nothing new. With a [ref], the file is found by it when it is sent (it may have moved by then), and
+     * [from] is the file system it is in now.
+     */
+    suspend fun put(path: Path, about: FileAbout, ref: String? = null, from: FileSystem = fileSystem): String {
+        val sha256 = sha256Of(from, path)
+        val size = from.metadata(path).size ?: error("No size for $path")
         mutex.withLock {
             val known = files.firstOrNull { it.sha256 == sha256 }
             if (known != null && known.state != UploadState.REFUSED) return sha256
-            update(files.filterNot { it.sha256 == sha256 } + QueuedFile(path.toString(), sha256, size, about, now()))
+            update(files.filterNot { it.sha256 == sha256 } + QueuedFile(path.toString(), sha256, size, about, now(), ref = ref))
         }
         return sha256
     }
@@ -120,8 +141,10 @@ internal class UploadQueue(
     }
 
     private suspend fun send(backend: ShedBackend, queued: QueuedFile): UploadState {
-        val path = queued.path.toPath()
-        if (!fileSystem.exists(path)) return finish(queued, UploadState.REFUSED, "The file is gone from the device")
+        val located = if (queued.ref != null) locator?.locate(queued.ref) else Located(fileSystem, queued.path.toPath())
+        val source = located?.fileSystem
+        val path = located?.path
+        if (source == null || path == null || !source.exists(path)) return finish(queued, UploadState.REFUSED, "The file is gone from the device")
         var restarts = 0
         while (true) {
             when (val start = backend.startUpload(queued.sha256, queued.size, queued.about)) {
@@ -130,7 +153,7 @@ internal class UploadQueue(
                 is UploadStart.Ready -> {
                     var offset = start.offset
                     progress(queued, offset)
-                    fileSystem.openReadOnly(path).use { handle ->
+                    source.openReadOnly(path).use { handle ->
                         while (true) {
                             val length = minOf(start.pieceSize, queued.size - offset).toInt()
                             if (length <= 0) break // the storage says it has it all, yet asks for more: start again
@@ -183,7 +206,7 @@ internal class UploadQueue(
         _status.value = new.map(::statusOf)
     }
 
-    private fun statusOf(q: QueuedFile) = UploadStatus(q.sha256, q.about.fileName, q.size, q.sent, q.state, q.refused)
+    private fun statusOf(q: QueuedFile) = UploadStatus(q.sha256, q.about.fileName, q.size, q.sent, q.state, q.refused, q.ref)
 
     companion object {
         /** How long files done stay listed: a week. */
