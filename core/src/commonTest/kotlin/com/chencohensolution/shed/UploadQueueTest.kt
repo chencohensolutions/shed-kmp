@@ -68,6 +68,21 @@ class UploadQueueTest {
     }
 
     @Test
+    fun aFileDoneStaysListedUntilTheAppAcknowledgesIt() = runTest {
+        val backend = FakeBackend()
+        var clock = 0L
+        val shed = Shed(backend, fs, dir, now = { clock })
+        val sha = shed.put(file("n/audio.aac", "sent long ago"), about)
+        shed.runUploads()
+        clock += 365L * 24 * 60 * 60 * 1000
+        shed.put(file("o/audio.aac", "another"), about)
+        shed.runUploads()
+        assertEquals(UploadState.DONE, Shed(backend, fs, dir).uploads.value.first { it.sha256 == sha }.state)
+        shed.acknowledge(listOf(sha))
+        assertEquals(false, Shed(backend, fs, dir).uploads.value.any { it.sha256 == sha })
+    }
+
+    @Test
     fun aFileTheStorageHasIsNotSentAgain() = runTest {
         val backend = FakeBackend()
         val shed = Shed(backend, fs, dir)

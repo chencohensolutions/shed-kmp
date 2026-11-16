@@ -46,6 +46,12 @@ class Shed(
     suspend fun put(file: Path, about: FileAbout, ref: String? = null, from: FileSystem? = null): String =
         if (from == null) queue.put(file, about, ref) else queue.put(file, about, ref, from)
 
+    /**
+     * The app has recorded these files as sent ([UploadState.DONE] in [uploads]): shed forgets them. Until then a file
+     * done stays listed, however long, so the app always learns it went up (it may be closed when the upload ends).
+     */
+    suspend fun acknowledge(sha256s: Collection<String>) = queue.acknowledge(sha256s)
+
     /** How many files wait to be sent. */
     fun waiting(): Int = queue.waiting()
 
