@@ -41,6 +41,8 @@ data class RemoteFile(
     val storedAt: String? = null,
     /** The user tucked it away: apps leave it out of their lists until the user asks to see it. */
     val tucked: Boolean = false,
+    /** What the apps wrote about it, a JSON object as text (the journal server's note); null when none. */
+    val note: String? = null,
 )
 
 /** What changed on the storage since a cursor. */

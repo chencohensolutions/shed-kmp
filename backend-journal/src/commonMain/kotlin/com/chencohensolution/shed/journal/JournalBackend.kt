@@ -396,7 +396,7 @@ class JournalBackend internal constructor(
     override suspend fun changes(cursor: String?): ChangePage {
         val page = query(
             """query(${'$'}s: String) { changes(since: ${'$'}s, limit: 2000) { cursor hasMore changes { path deleted
-               media { sha256 kind fileName mimeType size takenAt durationMs source uploadedAt tucked } } } }""",
+               media { sha256 kind fileName mimeType size takenAt durationMs source uploadedAt tucked note } } } }""",
             mapOf("s" to (cursor?.let(::JsonPrimitive) ?: JsonNull)),
         ).obj("changes")
         val added = mutableListOf<RemoteFile>()
@@ -422,6 +422,7 @@ class JournalBackend internal constructor(
                 ),
                 storedAt = media.str("uploadedAt"),
                 tucked = media.str("tucked") == "true",
+                note = media.str("note"),
             )
         }
         return ChangePage(added, removed, page.str("cursor")!!, page.str("hasMore") == "true")

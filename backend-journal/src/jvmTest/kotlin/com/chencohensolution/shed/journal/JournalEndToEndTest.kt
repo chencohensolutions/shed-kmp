@@ -92,6 +92,8 @@ class JournalEndToEndTest {
         shed.sync()
         assertTrue(shed.remote.value.single { it.sha256 == sha }.tucked, "tucked: ${shed.remote.value}")
         assertTrue(backend.setNote(sha, buildJsonObject { put("audioLogs", buildJsonObject { put("title", "Class") }) }))
+        shed.sync()
+        assertTrue(shed.remote.value.single { it.sha256 == sha }.note!!.contains("Class"), "the note comes with the file")
         backend.setPrivate(listOf(sha), true)
         shed.sync()
         assertTrue(shed.remote.value.none { it.sha256 == sha }, "a private recording left Audio Logs")
