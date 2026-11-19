@@ -66,7 +66,10 @@ shed finds it (`ShedSiblings.find`) and asks it (`ShedSiblings.ask`, started for
 `SharePairingActivity` (in shed's manifest, so every shed app has it) asks the user, naming the app that asks, and
 answers with `JournalBackend.siblingLink(app)`: an enrollment link whose code the server made for that app only, for 2
 minutes. The asking app pairs with it like any link, gets its own key and certificate, and the server keeps it as one
-more app of the same phone (`siblingEnrollmentCode`; revoked together).
+more app of the same phone (`siblingEnrollmentCode`; revoked together). Only apps signed with the same key find and
+answer each other (Nov 19, 2026), and a known app (`ShedSiblings.KNOWN_APPS`) gets its own name on the server
+whatever it asks for; the dialog shows the asking app's package. So Journal and Audio Logs must be signed with one
+key to pair this way.
 
 ## Finding the server
 
